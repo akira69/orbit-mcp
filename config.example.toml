@@ -2,6 +2,8 @@
 orbit = "/usr/local/bin/orbit"
 timeout_seconds = 120
 max_output_bytes = 32000
+# Optional: shared private job observations; defaults to XDG_STATE_HOME/orbit-mcp.
+# state_dir = "/home/your-user/.local/state/orbit-mcp"
 
 [repositories]
 myproject = "/srv/projects/myproject"

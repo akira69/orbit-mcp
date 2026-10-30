@@ -92,7 +92,7 @@ async def test_invalid_repo_and_ranges(setup):
 
 async def test_index_only_uses_configured_repository(setup):
     adapter, repo, _ = setup
-    result = await adapter.index("demo")
+    result = await adapter.index("demo", background=False)
     assert json.loads(result["output"])["args"] == ["workspace", "index", str(repo)]
 
 
@@ -162,6 +162,7 @@ async def test_real_stdio_lists_tools_and_returns_results_and_errors(setup):
             "orbit_search",
             "orbit_context",
             "orbit_index",
+            "orbit_status",
         }
         result = await client.call_tool("orbit_search", {"repository": "demo", "query": "hello"})
         assert not result.is_error

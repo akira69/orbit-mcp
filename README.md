@@ -15,7 +15,8 @@ Token savings depend on the task and have not been benchmarked.
 | `orbit_repositories` | List the operator-configured repository aliases |
 | `orbit_search` | Literal, regex, or definition search; optional relative path scope |
 | `orbit_context` | Batch file ranges and named symbols with indexed relationships |
-| `orbit_index` | Refresh a repository's graph without changing source files |
+| `orbit_index` | Start/reuse a detached index; optional bounded foreground mode |
+| `orbit_status` | Inspect worker, manifest, commit and working-tree state |
 
 Context targets look like `src/app.py`, `src/app.py:10-80`, or
 `symbol:calculate`. Up to 20 targets can be read in one call. Bare files default
@@ -26,6 +27,40 @@ prevent queries from switching to GitLab's remote target syntax.
 
 Orbit may widen the optional search path scope when no matches are found.
 The configured repository, not that filter, is the access boundary.
+
+## Background indexing and status
+
+Call `orbit_index` with `{"repository":"myproject"}`. It returns after Orbit's
+startup handshake, rather than waiting for the whole index. Repeated calls reuse
+an observed live worker; simultaneous starts may return `busy`. Then poll
+`orbit_status` for the same alias. Jobs survive MCP/SSH disconnects, and the next
+connection can inspect them. No extra daemon is installed.
+
+Status distinguishes `indexing`/`queued_or_indexing`, `indexed`, `stale`,
+`not_indexed`, and `unknown`. It reports worker liveness separately
+from Orbit's saved manifest. PID identity includes process start time and boot
+ID, so a reused PID does not count as the original worker. `dirty` reports
+uncommitted/untracked files; `working_tree_freshness` remains `unverified` because
+Orbit exposes no full working-tree freshness fingerprint.
+
+**An indexed manifest does not prove the latest refresh succeeded.** Orbit's
+detached child does not expose a recoverable exit code to this adapter. An
+unobserved worker or an interrupted startup is reported conservatively. Worker
+liveness refers to the last adapter request; a later external job may be running.
+An initially queued worker may have started, so its current phase is reported as
+`queued_or_indexing`. Check
+status before retrying a timed-out start; do not reset the graph. Use source
+queries to check the content you need. Progress percentages are unavailable.
+
+Set `background:false` to use the original bounded foreground index command.
+The default changed to background indexing in 0.2.0.
+
+Job observations live in `$XDG_STATE_HOME/orbit-mcp` (default
+`~/.local/state/orbit-mcp`), or the configured `state_dir`. New directories and
+records are private. Connections must use the same Unix account, configuration,
+and Orbit data environment to share jobs. Status never returns another
+repository's manifest or raw index logs. Large workspace manifests may require
+raising `max_output_bytes`; truncated JSON is an error, not a partial status.
 
 ## Install on the server
 
@@ -53,6 +88,28 @@ discovery occurs. Keep real paths and credentials out of this repository.
 
 The process waits silently for MCP input. It needs no systemd service,
 background daemon, HTTP listener, or extra network port.
+
+## Diagnose a connection
+
+```sh
+orbit-mcp --config /absolute/path/config.toml --check
+```
+
+This prints JSON and exits 0 on success or 1 on failure. It checks executable
+version, repository roots and initial commits, writable adapter state, and a
+real MCP subprocess handshake with five-tool discovery and a repository-list
+call. It does not index or modify checkouts. Orbit 1.0.0 is the tested version;
+the report shows the installed version so upgrades can be assessed explicitly.
+
+Run the same check over SSH from **each** desktop to verify that SSH route:
+
+```sh
+ssh -T -o BatchMode=yes orbit-devbox /absolute/path/orbit-mcp/.venv/bin/orbit-mcp --config /absolute/path/config.toml --check
+```
+
+A successful server-side check does not establish that a particular desktop app
+has loaded its MCP configuration. Restart that client and call
+`orbit_repositories` there too.
 
 ## Connect from macOS or Windows
 
@@ -121,9 +178,11 @@ copied or checked out there. Any reachable LAN/VPN SSH host works.
   Search follows Orbit's handling of working-tree and ignored files.
 - No arbitrary shell, SQL, global graph IDs, or hosted GitLab targets.
 - Commands serialize per connection; Orbit handles cross-process index locks.
-  Timeouts and cancellation kill/reap the command process group. Pre-index large
-  repos or raise the configured timeout, up to 600 seconds.
-- Responses contain `output` and `truncated`. Narrow queries when truncated.
+  Timeouts and cancellation kill/reap the foreground command process group.
+  Explicit background indexes survive disconnects. Use them for large repos;
+  foreground timeout is configurable up to 600 seconds.
+- Search/context/foreground-index responses contain `output` and `truncated`.
+  Background/status responses contain state fields. Narrow queries when truncated.
   A truncated index response is not proof that indexing completed.
 - GitLab API credential environment variables are removed from child processes;
   telemetry is disabled for each command. This is not a network sandbox:
@@ -149,5 +208,7 @@ ORBIT_INTEGRATION=1 .venv/bin/pytest -q
 
 Default tests use a controlled executable fixture and real MCP stdio. The opt-in
 integration test uses real Orbit with a disposable Git repo and index, verifies
-all search modes and caller context, and checks uncommitted-file refresh. CI runs
+background indexing across reconnects, search modes, caller context, and
+uncommitted-file refresh. `scripts/probe_upstream.py` records additional small
+language-resolution observations using disposable repositories. CI runs
 default tests on Python 3.11/3.13. This adapter is MIT licensed; Orbit is separate.

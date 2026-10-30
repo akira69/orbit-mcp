@@ -6,7 +6,9 @@ website pages still list it.
 
 | Capability | Adapter | Difference |
 | --- | --- | --- |
-| Index local graph | `orbit_index` | Current `workspace index` |
+| Index local graph | `orbit_index` | Native detached indexing by default; foreground opt-in |
+| Index status | `orbit_status` | Worker identity, manifest snapshot, HEAD/dirty state |
+| Diagnostic | `--check` | Version, repo/state checks and real MCP discovery/call |
 | Choose repository | Named allowlist | Does not expose every globally indexed repo |
 | Search source | Literal, regex, definitions; path scope | No remote qualifiers; regex excludes colon |
 | Definition/caller context | `symbol:Name` | Current `context`, not global graph IDs |
@@ -14,7 +16,7 @@ website pages still list it.
 | Working-tree updates | Current CLI handles refresh | Real integration test verifies edited file |
 | Empty search | Successful empty response | Other failures become tool errors |
 | Large output | Bounded, explicit truncation | Narrow query/range to retrieve more |
-| Timeout/disconnect | Kill and reap process group | No orphaned index command |
+| Timeout/disconnect | Kill and reap foreground process group | Explicit background indexes survive disconnects |
 | Historical SQL/schema | Omitted | Avoid binding clients to DuckDB internals |
 | GitLab MRs/issues/pipelines | Omitted | Separate authenticated hosted service |
 | HTTP transport | Omitted | SSH carries stdio on Windows/macOS |

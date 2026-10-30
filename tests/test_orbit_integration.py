@@ -41,7 +41,9 @@ async def test_real_orbit_over_mcp(tmp_path):
         await asyncio.to_thread(subprocess.run, args, cwd=repo, check=True)
     config = tmp_path / "config.toml"
     config.write_text(
-        f"orbit = {json.dumps(orbit)}\n[repositories]\ndemo = {json.dumps(str(repo))}\n"
+        f"orbit = {json.dumps(orbit)}\n"
+        f"state_dir = {json.dumps(str(tmp_path / 'state'))}\n"
+        f"[repositories]\ndemo = {json.dumps(str(repo))}\n"
     )
     transport = StdioServerParameters(
         command=sys.executable,
@@ -51,6 +53,18 @@ async def test_real_orbit_over_mcp(tmp_path):
     async with Client(transport, read_timeout_seconds=30) as client:
         result = await client.call_tool("orbit_index", {"repository": "demo"})
         assert not result.is_error, result
+    # Disconnect and reconnect: native worker and saved observations outlive MCP.
+    async with Client(transport, read_timeout_seconds=30) as client:
+        for _ in range(100):
+            result = await client.call_tool("orbit_status", {"repository": "demo"})
+            assert not result.is_error, result
+            status = json.loads(result.content[0].text)
+            if status["state"] == "indexed" and status["worker"] != "running":
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail(f"Background index did not complete: {status}")
+        assert status["indexed_commit"] == status["head"]
         for mode in ["literal", "regex", "definitions"]:
             result = await client.call_tool(
                 "orbit_search", {"repository": "demo", "query": "double", "mode": mode}

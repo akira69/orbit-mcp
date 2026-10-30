@@ -2,17 +2,20 @@
 
 import argparse
 import asyncio
+import json
 import os
 import re
 import shutil
 import signal
 import subprocess
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from mcp.server import MCPServer
+
+from orbit_mcp import indexing
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class Config:
     repositories: dict[str, Path]
     timeout_seconds: float = 120
     max_output_bytes: int = 32_000
+    state_dir: Path = field(default_factory=indexing.default_state_dir)
 
 
 def load_config(path: Path) -> Config:
@@ -53,7 +57,8 @@ def load_config(path: Path) -> Config:
     limit = int(data.get("max_output_bytes", 32_000))
     if not 0 < timeout <= 600 or not 1024 <= limit <= 1_000_000:
         raise ValueError("timeout_seconds must be 0..600; max_output_bytes must be 1024..1000000")
-    return Config(str(Path(executable).resolve()), repositories, timeout, limit)
+    state_dir = Path(data.get("state_dir", indexing.default_state_dir())).expanduser().resolve()
+    return Config(str(Path(executable).resolve()), repositories, timeout, limit, state_dir)
 
 
 class Adapter:
@@ -68,7 +73,13 @@ class Adapter:
         except KeyError:
             raise ValueError("Unknown repository; call orbit_repositories first") from None
 
-    async def run(self, root: Path, args: list[str], no_match_ok: bool = False) -> dict:
+    async def run(
+        self,
+        root: Path,
+        args: list[str],
+        no_match_ok: bool = False,
+        separate_stderr: bool = False,
+    ) -> dict:
         async with self.lock:
             env = os.environ.copy()
             env["ORBIT_TELEMETRY_ENABLED"] = "false"
@@ -83,9 +94,17 @@ class Adapter:
                 env=env,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stderr=asyncio.subprocess.PIPE if separate_stderr else asyncio.subprocess.STDOUT,
                 start_new_session=True,
             )
+
+            async def drain_diagnostics():
+                saved = bytearray()
+                while chunk := await process.stderr.read(65536):
+                    saved.extend(chunk[: max(0, self.config.max_output_bytes - len(saved))])
+                return saved.decode("utf-8", errors="replace")
+
+            diagnostics = asyncio.create_task(drain_diagnostics()) if separate_stderr else None
             try:
                 async with asyncio.timeout(self.config.timeout_seconds):
                     try:
@@ -95,14 +114,17 @@ class Adapter:
                     truncated = len(output) > self.config.max_output_bytes
                     if not truncated:
                         await process.wait()
+                    diagnostic = (
+                        await asyncio.shield(diagnostics) if diagnostics and not truncated else ""
+                    )
                 text = output[: self.config.max_output_bytes].decode("utf-8", errors="ignore")
                 if not truncated and process.returncode == 75:
                     raise RuntimeError(
                         "Orbit index is busy (temporary lock timeout); retry after the "
-                        f"running index completes. Do not reset the graph. {text}"
+                        f"running index completes. Do not reset the graph. {text}{diagnostic}"
                     )
                 if not truncated and process.returncode not in ({0, 1} if no_match_ok else {0}):
-                    raise RuntimeError(f"Orbit exited {process.returncode}: {text}")
+                    raise RuntimeError(f"Orbit exited {process.returncode}: {text}{diagnostic}")
                 return {"output": text, "truncated": truncated}
             except TimeoutError:
                 raise TimeoutError("Orbit timed out; index the repository first or retry") from None
@@ -117,6 +139,8 @@ class Adapter:
                 while await process.stdout.read(65536):
                     pass
                 await process.wait()
+                if diagnostics:
+                    await diagnostics
 
     def local_path(self, root: Path, path: str) -> Path:
         if not path or Path(path).is_absolute() or ":" in path or "\0" in path:
@@ -230,7 +254,12 @@ class Adapter:
                 args.append(await self.file_target(root, path, int(start), int(end)))
         return await self.run(root, ["context", "--repo", str(root), "--", *args])
 
-    async def index(self, repository: str) -> dict:
+    async def status(self, repository: str) -> dict:
+        return await indexing.status(self, repository)
+
+    async def index(self, repository: str, background: bool = True) -> dict:
+        if background:
+            return await indexing.start(self, repository)
         root = self.repository(repository)
         return await self.run(root, ["workspace", "index", str(root)])
 
@@ -239,7 +268,7 @@ def create_server(config: Config) -> MCPServer:
     adapter = Adapter(config)
     server = MCPServer(
         "orbit-local",
-        version="0.1.0",
+        version="0.2.0",
         instructions="Query local code in configured repositories. Start with orbit_repositories. "
         "Search supports literal, regex and definition modes. Context accepts a batch of "
         "relative paths, path:start-end ranges, and symbol:Name targets. "
@@ -278,9 +307,20 @@ def create_server(config: Config) -> MCPServer:
         return await adapter.context_batch(repository, targets)
 
     @server.tool()
-    async def orbit_index(repository: str) -> dict:
-        """Refresh a configured repository's local index; source files are not modified."""
-        return await adapter.index(repository)
+    async def orbit_index(repository: str, background: bool = True) -> dict:
+        """Start/reuse a background index; poll orbit_status. background=false waits (bounded).
+
+        Background jobs survive disconnects. Source files are not modified.
+        """
+        return await adapter.index(repository, background)
+
+    @server.tool()
+    async def orbit_status(repository: str) -> dict:
+        """Check background worker, index manifest, HEAD and dirty state without indexing.
+
+        An indexed manifest is a snapshot, not proof the latest refresh succeeded.
+        """
+        return await adapter.status(repository)
 
     return server
 
@@ -288,7 +328,16 @@ def create_server(config: Config) -> MCPServer:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True, help="Local TOML configuration")
+    parser.add_argument(
+        "--check", action="store_true", help="Check server setup and MCP; emit JSON"
+    )
     args = parser.parse_args()
+    if args.check:
+        from orbit_mcp.diagnostics import check
+
+        report = asyncio.run(check(args.config))
+        print(json.dumps(report, indent=2))
+        raise SystemExit(0 if report["ok"] else 1)
     try:
         config = load_config(args.config)
     except (OSError, ValueError, TypeError) as error:
