@@ -35,7 +35,7 @@ server-side connection; desktop clients still need their own SSH test.
 - [x] Real Orbit integration, cross-session polling, full tests and lint.
 - [x] Further upstream issue/release investigation and small reproductions;
       document evidence and prioritize follow-ups without speculative expansion.
-- [ ] One fresh review, fixes, publish, install on devbox, verify SSH transport.
+- [x] One fresh review, fixes, publish, install on devbox, verify SSH transport.
 
 ## Decisions / evidence
 
@@ -67,3 +67,12 @@ server-side connection; desktop clients still need their own SSH test.
 - Ruling: native manifest ownership is unavailable, so interrupted/failed versus
   a later external job remains unknown. This sacrifices a definitive failure
   label to avoid incorrectly reporting live work as failed.
+
+- Final verification after review fixes: 43 tests passed with real Orbit enabled;
+  lint, formatting and whitespace checks passed.
+- Published implementation d31ff3a to main and installed package 0.2.0 on devbox.
+  Installed `--check` passed. Both local and SSH MCP smoke tests passed discovery,
+  repository listing, real source search, batched context and status. Desktop
+  Windows/macOS application configuration was not exercised by this server test.
+- Existing update-devbox installation step follows repository main and remains
+  compatible; the full system updater was not run for this application change.
