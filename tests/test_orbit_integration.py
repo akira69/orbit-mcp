@@ -22,6 +22,8 @@ async def test_real_orbit_over_mcp(tmp_path):
     (repo / "main.py").write_text(
         "from maths import double\n\ndef calculate():\n    return double(21)\n"
     )
+    (repo / "helper.sh").write_text('log_info() { echo "hello"; }\n')
+    (repo / "infra.tf").write_text('output "bootstrap_bucket" { value = "example" }\n')
     for args in [
         ["git", "init", "-q"],
         ["git", "add", "."],
@@ -67,3 +69,8 @@ async def test_real_orbit_over_mcp(tmp_path):
         )
         assert not result.is_error, result
         assert "value + value" in str(result)
+        # Upstream #1341 reported these languages missing from local grep.
+        for query, filename in [("log_info", "helper.sh"), ("bootstrap_bucket", "infra.tf")]:
+            result = await client.call_tool("orbit_search", {"repository": "demo", "query": query})
+            assert not result.is_error, result
+            assert filename in str(result)

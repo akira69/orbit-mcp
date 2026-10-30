@@ -137,6 +137,8 @@ git pull --ff-only
 ```
 
 Update Orbit separately. See [compatibility notes](docs/compatibility.md).
+The [upstream findings](docs/upstream-findings.md) link prerelease issues and
+release notes to implemented safeguards and the next feature priorities.
 
 ```sh
 .venv/bin/pip install -e '.[dev]'

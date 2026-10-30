@@ -28,6 +28,7 @@ def setup(tmp_path):
         "if 'ERROR' in sys.argv:\n"
         "    print('fixture command failed', file=sys.stderr); sys.exit(2)\n"
         "if 'NOMATCH' in sys.argv: sys.exit(1)\n"
+        "if 'BUSY' in sys.argv: sys.exit(75)\n"
         "print(json.dumps({'args': sys.argv[1:], 'cwd': os.getcwd()}))\n"
     )
     fake.chmod(0o755)
@@ -102,6 +103,12 @@ async def test_no_match_is_success_and_cli_failure_is_error(setup):
     assert not result["truncated"]
     with pytest.raises(RuntimeError, match="fixture command failed"):
         await adapter.search("demo", "ERROR")
+
+
+async def test_busy_index_has_actionable_retry_error(setup):
+    adapter, _, _ = setup
+    with pytest.raises(RuntimeError, match="busy.*retry"):
+        await adapter.search("demo", "BUSY")
 
 
 async def test_output_is_bounded_and_timeout_is_reported(setup):
@@ -214,3 +221,29 @@ async def test_search_modes_and_path_scope(setup):
     ]:
         with pytest.raises(ValueError):
             await adapter.search("demo", query, mode=mode, path=path)
+
+
+async def test_large_flood_does_not_deadlock_during_cleanup(setup, tmp_path):
+    adapter, _, _ = setup
+    fake = tmp_path / "orbit"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stdout.write('x' * 10000000)\n")
+    result = await asyncio.wait_for(adapter.search("demo", "x"), 3)
+    assert result["truncated"]
+    assert len(result["output"]) == 1024
+
+
+async def test_tracked_check_treats_filename_as_literal(setup):
+    adapter, repo, _ = setup
+    (repo / "a.env").write_text("tracked")
+    (repo / "[a].env").write_text("untracked secret")
+    subprocess.run(["git", "-C", str(repo), "add", "a.env"], check=True)
+    with pytest.raises(ValueError, match="tracked"):
+        await adapter.context_batch("demo", ["[a].env"])
+
+
+@pytest.mark.parametrize("name", ["secrets.env", "secrets"])
+async def test_symbol_cannot_be_reinterpreted_as_a_file(setup, name):
+    adapter, repo, _ = setup
+    (repo / name).write_text("untracked secret")
+    with pytest.raises(ValueError, match="file"):
+        await adapter.context_batch("demo", ["symbol:" + name])
