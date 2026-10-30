@@ -1,0 +1,7 @@
+# Server-side paths only. Keep real paths in your private configuration.
+orbit = "/usr/local/bin/orbit"
+timeout_seconds = 120
+max_output_bytes = 32000
+
+[repositories]
+myproject = "/srv/projects/myproject"
