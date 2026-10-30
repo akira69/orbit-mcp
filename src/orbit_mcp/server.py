@@ -101,7 +101,7 @@ class Adapter:
             async def drain_diagnostics():
                 saved = bytearray()
                 while chunk := await process.stderr.read(65536):
-                    saved.extend(chunk[: max(0, self.config.max_output_bytes - len(saved))])
+                    saved.extend(chunk[: max(0, self.config.max_output_bytes + 1 - len(saved))])
                 return saved.decode("utf-8", errors="replace")
 
             diagnostics = asyncio.create_task(drain_diagnostics()) if separate_stderr else None
@@ -125,7 +125,21 @@ class Adapter:
                     )
                 if not truncated and process.returncode not in ({0, 1} if no_match_ok else {0}):
                     raise RuntimeError(f"Orbit exited {process.returncode}: {text}{diagnostic}")
-                return {"output": text, "truncated": truncated}
+                if no_match_ok and not truncated and process.returncode == 1 and diagnostic:
+                    # Orbit also uses exit 1 for operational errors. Any stderr makes
+                    # a miss ambiguous, even if it might only contain a warning.
+                    raise RuntimeError(
+                        f"Orbit exited 1 with diagnostics; cannot confirm no matches: "
+                        f"{text}{diagnostic}"
+                    )
+                if no_match_ok and diagnostic:
+                    output += diagnostic.encode("utf-8")
+                    truncated = len(output) > self.config.max_output_bytes
+                    text = output[: self.config.max_output_bytes].decode("utf-8", errors="ignore")
+                result = {"output": text, "truncated": truncated}
+                if no_match_ok and not truncated:
+                    result["matched"] = process.returncode == 0
+                return result
             except TimeoutError:
                 raise TimeoutError("Orbit timed out; index the repository first or retry") from None
             finally:
@@ -173,11 +187,30 @@ class Adapter:
             query = "def:" + query
         else:
             raise ValueError("Unknown search mode")
-        return await self.run(
+        result = await self.run(
             root,
             ["grep", "--repo", str(root), *flags, "--", query, str(target)],
             no_match_ok=True,
+            separate_stderr=True,
         )
+        if result.get("matched") is False:
+            if mode == "definitions":
+                result["hint"] = (
+                    "No indexed definition matched; this does not prove the code is absent. "
+                    "Retry orbit_search with mode='literal' and the original name, or use "
+                    "orbit_context on a known tracked file."
+                )
+            elif mode == "regex":
+                result["hint"] = (
+                    "No matches reported. Check the regex syntax, retry orbit_search with "
+                    "mode='literal' or a broader path, or use orbit_context on a known tracked file."
+                )
+            else:
+                result["hint"] = (
+                    "No matches in this search scope. Retry orbit_search with a broader query "
+                    "or path, or use orbit_context on a known tracked file."
+                )
+        return result
 
     async def context(
         self,
@@ -268,7 +301,7 @@ def create_server(config: Config) -> MCPServer:
     adapter = Adapter(config)
     server = MCPServer(
         "orbit-local",
-        version="0.2.0",
+        version="0.2.1",
         instructions="Query local code in configured repositories. Start with orbit_repositories. "
         "Search supports literal, regex and definition modes. Context accepts a batch of "
         "relative paths, path:start-end ranges, and symbol:Name targets. "

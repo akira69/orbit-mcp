@@ -6,7 +6,8 @@ connected to a Linux development server over SSH.
 This independent adapter runs the separately installed `orbit` CLI. It is not
 an official GitLab product and includes no GitLab source or binaries. Local
 queries need no GitLab account, API token, paid hosted graph, or GitLab server.
-Token savings depend on the task and have not been benchmarked.
+Token savings depend on the task. See the [benchmark methodology](docs/benchmark-methodology.md)
+and the measured results linked there.
 
 ## Tools
 
@@ -24,6 +25,16 @@ to lines 1–200; explicit ranges allow up to 1000 lines. Symbols return their
 definition and indexed connections. Search defaults to literal text; regex
 mode excludes colons and definitions mode accepts names/words. These constraints
 prevent queries from switching to GitLab's remote target syntax.
+
+Complete search results include `matched`. A true no-match result includes a
+short `hint`: definition misses recommend literal search or reading a known
+tracked file. The adapter does not issue a hidden fallback query. Truncated
+results do not claim whether matches exist, and command failures remain errors.
+Orbit 1.0 can return exit 1 for both no matches and operational failures: search
+stderr is captured separately, and exit 1 with any diagnostic is conservatively
+an error. This can also reject a harmless warning. Some invalid regexes produce
+an ordinary empty result with no diagnostics; `matched:false` means no match
+was reported, not that this adapter independently validated regex syntax.
 
 Orbit may widen the optional search path scope when no matches are found.
 The configured repository, not that filter, is the access boundary.

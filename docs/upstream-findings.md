@@ -83,12 +83,14 @@ results do not establish that an entire upstream issue is fixed.
 
 ## Next priorities after 0.2.0
 
-1. A compact hint when definition search returns no matches: retry literal
-   search or inspect the known file. No automatic hidden fallback that presents
-   text matches as graph definitions.
-2. A real task benchmark measuring total agent tokens/turns with and without
-   the adapter. Token savings remain unmeasured; extra status polling also costs
-   tokens, so start background indexing once and avoid excessive polling.
+1. Implemented in 0.2.1: compact no-match guidance, including literal search or
+   known-file context after definition misses. No hidden fallback. Real CLI
+   probes also found exit 1 used for storage failures; diagnostic-bearing exits
+   remain errors. Invalid regexes may be indistinguishable from empty results,
+   so regex guidance explicitly suggests checking syntax.
+2. A paired real-project benchmark is described in
+   [the methodology](benchmark-methodology.md). Count end-to-end usage and grade
+   answers; extra schemas, discovery and polling can offset smaller responses.
 3. Expand resolution fixtures only for languages and shapes in actual projects,
    especially interfaces and nested TypeScript aliases. Backend fixes belong in
    Orbit; the adapter should remain small.

@@ -83,6 +83,14 @@ async def test_real_orbit_over_mcp(tmp_path):
         )
         assert not result.is_error, result
         assert "value + value" in str(result)
+        missing = await client.call_tool(
+            "orbit_search",
+            {"repository": "demo", "query": "missing_symbol_928347", "mode": "definitions"},
+        )
+        assert not missing.is_error
+        payload = json.loads(missing.content[0].text)
+        assert payload["matched"] is False
+        assert "literal" in payload["hint"]
         # Upstream #1341 reported these languages missing from local grep.
         for query, filename in [("log_info", "helper.sh"), ("bootstrap_bucket", "infra.tf")]:
             result = await client.call_tool("orbit_search", {"repository": "demo", "query": query})
